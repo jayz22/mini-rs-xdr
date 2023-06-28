@@ -293,32 +293,6 @@ pub trait WriteXdr {
     }
 }
 
-/// `Pad_len` returns the number of bytes to pad an XDR value of the given
-/// length to make the final serialized size a multiple of 4.
-
-fn pad_len(len: usize) -> usize {
-    (4 - (len % 4)) % 4
-}
-
-impl ReadXdr for i32 {
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self> {
-        let mut b = [0u8; 4];
-        r.read_exact(&mut b)?;
-        let i = i32::from_be_bytes(b);
-        Ok(i)
-    }
-}
-
-impl WriteXdr for i32 {
-    
-    fn write_xdr(&self, w: &mut impl Write) -> Result<()> {
-        let b: [u8; 4] = self.to_be_bytes();
-        w.write_all(&b)?;
-        Ok(())
-    }
-}
-
 impl ReadXdr for u32 {
     
     fn read_xdr(r: &mut impl Read) -> Result<Self> {
@@ -338,89 +312,6 @@ impl WriteXdr for u32 {
     }
 }
 
-impl ReadXdr for i64 {
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self> {
-        let mut b = [0u8; 8];
-        r.read_exact(&mut b)?;
-        let i = i64::from_be_bytes(b);
-        Ok(i)
-    }
-}
-
-impl WriteXdr for i64 {
-    
-    fn write_xdr(&self, w: &mut impl Write) -> Result<()> {
-        let b: [u8; 8] = self.to_be_bytes();
-        w.write_all(&b)?;
-        Ok(())
-    }
-}
-
-impl ReadXdr for u64 {
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self> {
-        let mut b = [0u8; 8];
-        r.read_exact(&mut b)?;
-        let i = u64::from_be_bytes(b);
-        Ok(i)
-    }
-}
-
-impl WriteXdr for u64 {
-    
-    fn write_xdr(&self, w: &mut impl Write) -> Result<()> {
-        let b: [u8; 8] = self.to_be_bytes();
-        w.write_all(&b)?;
-        Ok(())
-    }
-}
-
-impl ReadXdr for f32 {
-    
-    fn read_xdr(_r: &mut impl Read) -> Result<Self> {
-        todo!()
-    }
-}
-
-impl WriteXdr for f32 {
-    
-    fn write_xdr(&self, _w: &mut impl Write) -> Result<()> {
-        todo!()
-    }
-}
-
-impl ReadXdr for f64 {
-    
-    fn read_xdr(_r: &mut impl Read) -> Result<Self> {
-        todo!()
-    }
-}
-
-impl WriteXdr for f64 {
-    
-    fn write_xdr(&self, _w: &mut impl Write) -> Result<()> {
-        todo!()
-    }
-}
-
-impl ReadXdr for bool {
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self> {
-        let i = u32::read_xdr(r)?;
-        let b = i == 1;
-        Ok(b)
-    }
-}
-
-impl WriteXdr for bool {
-    
-    fn write_xdr(&self, w: &mut impl Write) -> Result<()> {
-        let i = u32::from(*self); // true = 1, false = 0
-        i.write_xdr(w)?;
-        Ok(())
-    }
-}
 
 impl<T: ReadXdr> ReadXdr for Option<T> {
     
@@ -456,7 +347,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let a: Option<Option<Option<u64>>> = Some(Some(Some(5)));
+        let a: Option<Option<Option<u32>>> = Some(Some(Some(5)));
         let mut buf = Vec::new();
         a.write_xdr(&mut buf).unwrap();
         println!("{:?}", buf)
