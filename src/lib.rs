@@ -121,6 +121,10 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
     // `None` is returned, but not when a `Some(Err(...))` is returned. The
     // caller is responsible for checking each Result.
     fn next(&mut self) -> Option<Self::Item> {
+        let stack_limit = match subtract_stack_limit_maybe_error(self.stack_limit) {
+            Ok(s) => s,
+            Err(_) => return Some(Err(Error::StackOverflow)),
+        };
         // Try to fill the buffer to see if the EOF has been reached or not.
         // This happens to effectively peek to see if the stream has finished
         // and there are no more items.  It is necessary to do this because the
@@ -137,7 +141,7 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
             Ok([..]) => (),
         };
         // Read the buf into the type.
-        match S::read_xdr(&mut self.reader, self.stack_limit) {
+        match S::read_xdr(&mut self.reader, stack_limit) {
             Ok(s) => Some(Ok(s)),
             Err(e) => Some(Err(e)),
         }
@@ -369,7 +373,7 @@ mod tests {
     #[should_panic]
     #[test]
     fn stack_overflow() {
-        let stack_limit = 2;
+        let stack_limit = 4;
         let a: Option<Option<Option<u32>>> = Some(Some(Some(5)));
         let mut buf = Vec::new();
         a.write_xdr(&mut buf, stack_limit).unwrap();
