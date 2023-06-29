@@ -1,6 +1,8 @@
+use core::cell::RefCell;
 use std::{
-    error, io,
-    io::{BufRead, BufReader, Cursor, Read, Write}, marker::PhantomData, fmt,
+    error, fmt, io,
+    io::{BufRead, BufReader, Cursor, Read, Write},
+    marker::PhantomData,
 };
 
 #[allow(dead_code)]
@@ -13,7 +15,7 @@ type Result<T> = core::result::Result<T, Error>;
 pub enum Error {
     Invalid,
     Io(io::Error),
-    StackOverflow
+    StackOverflow,
 }
 
 impl PartialEq for Error {
@@ -40,7 +42,7 @@ impl fmt::Display for Error {
         match self {
             Error::Invalid => write!(f, "xdr value invalid"),
             Error::Io(e) => write!(f, "{e}"),
-            Error::StackOverflow => write!(f, "stack overflow")
+            Error::StackOverflow => write!(f, "stack overflow"),
         }
     }
 }
@@ -56,21 +58,20 @@ impl From<Error> for () {
     fn from(_: Error) {}
 }
 
+// The `DLR` part is the original buffer type passed into the ReadXdr type.
 pub struct ReadXdrIter<R: Read, S: ReadXdr> {
-    reader: BufReader<R>,
+    reader: DepthLimitedRead<BufReader<R>>,
     _s: PhantomData<S>,
 }
 
-
 impl<R: Read, S: ReadXdr> ReadXdrIter<R, S> {
-    fn new(r: R) -> Self {
+    fn new(r: R, depth_limit: u32) -> Self {
         Self {
-            reader: BufReader::new(r),
+            reader: DepthLimitedRead::new(BufReader::new(r), depth_limit),
             _s: PhantomData,
         }
     }
 }
-
 
 impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
     type Item = Result<S>;
@@ -89,7 +90,7 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
         // xdr types in this crate heavily use the `std::io::Read::read_exact`
         // method that doesn't distinguish between an EOF at the beginning of a
         // read and an EOF after a partial fill of a read_exact.
-        match self.reader.fill_buf() {
+        match self.reader.inner.fill_buf() {
             // If the reader has no more data and is unable to fill any new data
             // into its internal buf, then the EOF has been reached.
             Ok([]) => return None,
@@ -99,10 +100,70 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
             Ok([..]) => (),
         };
         // Read the buf into the type.
+        let dg = match DepthGuard::new(&mut self.reader) {
+            Ok(dg) => dg,
+            Err(e) => return Some(Err(e)),
+        };
         match S::read_xdr(&mut self.reader) {
             Ok(s) => Some(Ok(s)),
             Err(e) => Some(Err(e)),
         }
+    }
+}
+
+pub trait DepthLimiter {
+    fn enter(&self) -> Result<()>;
+    fn leave(&self);
+}
+
+struct DepthGuard<'a, D: DepthLimiter>(&'a D);
+
+impl<'a, D: DepthLimiter> DepthGuard<'a, D> {
+    fn new(d: &'a D) -> Result<Self> {
+        d.enter()?;
+        Ok(Self(d))
+    }
+}
+
+impl<'a, D: DepthLimiter> Drop for DepthGuard<'a, D> {
+    fn drop(&mut self) {
+        self.0.leave()
+    }
+}
+
+struct DepthLimitedRead<R: Read> {
+    inner: R,
+    depth: RefCell<u32>,
+}
+
+impl<R: Read> DepthLimitedRead<R> {
+    fn new(inner: R, depth: u32) -> Self {
+        DepthLimitedRead {
+            inner,
+            depth: RefCell::new(depth),
+        }
+    }
+}
+
+impl<R: Read> DepthLimiter for DepthLimitedRead<R> {
+    fn enter(&self) -> Result<()> {
+        let depth = *self.depth.borrow();
+        if depth == 0 {
+            return Err(Error::StackOverflow);
+        }
+        self.depth.replace(depth - 1);
+        Ok(())
+    }
+
+    fn leave(&self) {
+        let depth = *self.depth.borrow();
+        self.depth.replace(depth.saturating_add(1));
+    }
+}
+
+impl<R: Read> Read for DepthLimitedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
     }
 }
 
@@ -124,8 +185,8 @@ where
     ///
     /// Use [`ReadXdr::read_xdr_to_end`] when the intent is for all bytes in the
     /// read implementation to be consumed by the read.
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self>;
+
+    fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self>;
 
     /// Read the XDR and construct the type, and consider it an error if the
     /// read does not completely consume the read implementation.
@@ -145,8 +206,8 @@ where
     ///
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
-    
-    fn read_xdr_to_end(r: &mut impl Read) -> Result<Self> {
+
+    fn read_xdr_to_end<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
         let s = Self::read_xdr(r)?;
         // Check that any further reads, such as this read of one byte, read no
         // data, indicating EOF. If a byte is read the data is invalid.
@@ -171,8 +232,8 @@ where
     ///
     /// Use [`ReadXdr::read_xdr_into_to_end`] when the intent is for all bytes
     /// in the read implementation to be consumed by the read.
-    
-    fn read_xdr_into(&mut self, r: &mut impl Read) -> Result<()> {
+
+    fn read_xdr_into<DLR: DepthLimiter + Read>(&mut self, r: &mut DLR) -> Result<()> {
         *self = Self::read_xdr(r)?;
         Ok(())
     }
@@ -195,8 +256,8 @@ where
     ///
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
-    
-    fn read_xdr_into_to_end(&mut self, r: &mut impl Read) -> Result<()> {
+
+    fn read_xdr_into_to_end<DLR: DepthLimiter + Read>(&mut self, r: &mut DLR) -> Result<()> {
         Self::read_xdr_into(self, r)?;
         // Check that any further reads, such as this read of one byte, read no
         // data, indicating EOF. If a byte is read the data is invalid.
@@ -225,28 +286,26 @@ where
     ///
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
-    
-    fn read_xdr_iter<R: Read>(r: &mut R) -> ReadXdrIter<&mut R, Self> {
-        ReadXdrIter::new(r)
+
+    fn read_xdr_iter<R: Read>(r: &mut R, depth_limit: u32) -> ReadXdrIter<&mut R, Self> {
+        ReadXdrIter::new(r, depth_limit)
     }
 
     /// Construct the type from the XDR bytes.
     ///
     /// An error is returned if the bytes are not completely consumed by the
     /// deserialization.
-    
-    fn from_xdr(bytes: impl AsRef<[u8]>,) -> Result<Self> {
-        let mut cursor = Cursor::new(bytes.as_ref());
+
+    fn from_xdr(bytes: impl AsRef<[u8]>, depth_limit: u32) -> Result<Self> {
+        let mut cursor = DepthLimitedRead::new(Cursor::new(bytes.as_ref()), depth_limit);
         let t = Self::read_xdr_to_end(&mut cursor)?;
         Ok(t)
     }
 }
 
 pub trait WriteXdr {
-    
     fn write_xdr(&self, w: &mut impl Write) -> Result<()>;
 
-    
     fn to_xdr(&self) -> Result<Vec<u8>> {
         let mut cursor = Cursor::new(vec![]);
         self.write_xdr(&mut cursor)?;
@@ -256,8 +315,8 @@ pub trait WriteXdr {
 }
 
 impl ReadXdr for u32 {
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self> {
+    fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
+        let dg = DepthGuard::new(r)?;
         let mut b = [0u8; 4];
         r.read_exact(&mut b)?;
         let i = u32::from_be_bytes(b);
@@ -266,7 +325,6 @@ impl ReadXdr for u32 {
 }
 
 impl WriteXdr for u32 {
-    
     fn write_xdr(&self, w: &mut impl Write) -> Result<()> {
         let b: [u8; 4] = self.to_be_bytes();
         w.write_all(&b)?;
@@ -274,10 +332,9 @@ impl WriteXdr for u32 {
     }
 }
 
-
 impl<T: ReadXdr> ReadXdr for Option<T> {
-    
-    fn read_xdr(r: &mut impl Read) -> Result<Self> {
+    fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
+        let dg = DepthGuard::new(r)?;
         let i = u32::read_xdr(r)?;
         match i {
             0 => Ok(None),
@@ -291,7 +348,6 @@ impl<T: ReadXdr> ReadXdr for Option<T> {
 }
 
 impl<T: WriteXdr> WriteXdr for Option<T> {
-    
     fn write_xdr(&self, w: &mut impl Write) -> Result<()> {
         if let Some(t) = self {
             1u32.write_xdr(w)?;
@@ -312,6 +368,9 @@ mod tests {
         let a: Option<Option<Option<u32>>> = Some(Some(Some(5)));
         let mut buf = Vec::new();
         a.write_xdr(&mut buf).unwrap();
-        println!("{:?}", buf)
+
+        let mut dlr = DepthLimitedRead::new(Cursor::new(buf.as_slice()), 1);
+        let a_back: Option<Option<Option<u32>>> = ReadXdr::read_xdr(&mut dlr).unwrap();
+        assert_eq!(a, a_back);
     }
 }
