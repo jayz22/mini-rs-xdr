@@ -96,15 +96,15 @@ impl From<Error> for () {
 
 pub struct ReadXdrIter<R: Read, S: ReadXdr> {
     reader: BufReader<R>,
-    stack_limit: u32,
+    depth_limit: u32,
     _s: PhantomData<S>,
 }
 
 impl<R: Read, S: ReadXdr> ReadXdrIter<R, S> {
-    fn new(r: R, stack_limit: u32) -> Self {
+    fn new(r: R, depth_limit: u32) -> Self {
         Self {
             reader: BufReader::new(r),
-            stack_limit,
+            depth_limit,
             _s: PhantomData,
         }
     }
@@ -121,7 +121,7 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
     // `None` is returned, but not when a `Some(Err(...))` is returned. The
     // caller is responsible for checking each Result.
     fn next(&mut self) -> Option<Self::Item> {
-        let stack_limit = match subtract_stack_limit_maybe_error(self.stack_limit) {
+        let depth_limit = match subtract_depth_limit_maybe_error(self.depth_limit) {
             Ok(s) => s,
             Err(_) => return Some(Err(Error::StackOverflow)),
         };
@@ -141,7 +141,7 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
             Ok([..]) => (),
         };
         // Read the buf into the type.
-        match S::read_xdr(&mut self.reader, stack_limit) {
+        match S::read_xdr(&mut self.reader, depth_limit) {
             Ok(s) => Some(Ok(s)),
             Err(e) => Some(Err(e)),
         }
@@ -149,12 +149,12 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
 }
 
 #[inline(always)]
-fn subtract_stack_limit_maybe_error(mut stack_limit: u32) -> Result<u32> {
-    stack_limit -= 1;
-    if stack_limit == 0 {
+fn subtract_depth_limit_maybe_error(mut depth_limit: u32) -> Result<u32> {
+    if depth_limit == 0 {
         return Err(Error::StackOverflow);
     }
-    Ok(stack_limit)
+    depth_limit -= 1;
+    Ok(depth_limit)
 }
 
 pub trait ReadXdr
@@ -176,7 +176,7 @@ where
     /// Use [`ReadXdr::read_xdr_to_end`] when the intent is for all bytes in the
     /// read implementation to be consumed by the read.
 
-    fn read_xdr(r: &mut impl Read, stack_limit: u32) -> Result<Self>;
+    fn read_xdr(r: &mut impl Read, depth_limit: u32) -> Result<Self>;
 
     /// Read the XDR and construct the type, and consider it an error if the
     /// read does not completely consume the read implementation.
@@ -197,10 +197,10 @@ where
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
 
-    fn read_xdr_to_end(r: &mut impl Read, stack_limit: u32) -> Result<Self> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
+    fn read_xdr_to_end(r: &mut impl Read, depth_limit: u32) -> Result<Self> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
 
-        let s = Self::read_xdr(r, stack_limit)?;
+        let s = Self::read_xdr(r, depth_limit)?;
         // Check that any further reads, such as this read of one byte, read no
         // data, indicating EOF. If a byte is read the data is invalid.
         if r.read(&mut [0u8; 1])? == 0 {
@@ -225,9 +225,9 @@ where
     /// Use [`ReadXdr::read_xdr_into_to_end`] when the intent is for all bytes
     /// in the read implementation to be consumed by the read.
 
-    fn read_xdr_into(&mut self, r: &mut impl Read, stack_limit: u32) -> Result<()> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
-        *self = Self::read_xdr(r, stack_limit)?;
+    fn read_xdr_into(&mut self, r: &mut impl Read, depth_limit: u32) -> Result<()> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
+        *self = Self::read_xdr(r, depth_limit)?;
         Ok(())
     }
 
@@ -250,9 +250,9 @@ where
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
 
-    fn read_xdr_into_to_end(&mut self, r: &mut impl Read, stack_limit: u32) -> Result<()> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
-        Self::read_xdr_into(self, r, stack_limit)?;
+    fn read_xdr_into_to_end(&mut self, r: &mut impl Read, depth_limit: u32) -> Result<()> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
+        Self::read_xdr_into(self, r, depth_limit)?;
         // Check that any further reads, such as this read of one byte, read no
         // data, indicating EOF. If a byte is read the data is invalid.
         if r.read(&mut [0u8; 1])? == 0 {
@@ -281,8 +281,8 @@ where
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
 
-    fn read_xdr_iter<R: Read>(r: &mut R, stack_limit: u32) -> ReadXdrIter<&mut R, Self> {
-        ReadXdrIter::new(r, stack_limit)
+    fn read_xdr_iter<R: Read>(r: &mut R, depth_limit: u32) -> ReadXdrIter<&mut R, Self> {
+        ReadXdrIter::new(r, depth_limit)
     }
 
     /// Construct the type from the XDR bytes.
@@ -290,29 +290,29 @@ where
     /// An error is returned if the bytes are not completely consumed by the
     /// deserialization.
 
-    fn from_xdr(bytes: impl AsRef<[u8]>, stack_limit: u32) -> Result<Self> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
+    fn from_xdr(bytes: impl AsRef<[u8]>, depth_limit: u32) -> Result<Self> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
         let mut cursor = Cursor::new(bytes.as_ref());
-        let t = Self::read_xdr_to_end(&mut cursor, stack_limit)?;
+        let t = Self::read_xdr_to_end(&mut cursor, depth_limit)?;
         Ok(t)
     }
 }
 
 pub trait WriteXdr {
-    fn write_xdr(&self, w: &mut impl Write, stack_limit: u32) -> Result<()>;
+    fn write_xdr(&self, w: &mut impl Write, depth_limit: u32) -> Result<()>;
 
-    fn to_xdr(&self, stack_limit: u32) -> Result<Vec<u8>> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
+    fn to_xdr(&self, depth_limit: u32) -> Result<Vec<u8>> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
         let mut cursor = Cursor::new(vec![]);
-        self.write_xdr(&mut cursor, stack_limit)?;
+        self.write_xdr(&mut cursor, depth_limit)?;
         let bytes = cursor.into_inner();
         Ok(bytes)
     }
 }
 
 impl ReadXdr for u32 {
-    fn read_xdr(r: &mut impl Read, stack_limit: u32) -> Result<Self> {
-        let _ = subtract_stack_limit_maybe_error(stack_limit)?;
+    fn read_xdr(r: &mut impl Read, depth_limit: u32) -> Result<Self> {
+        let _ = subtract_depth_limit_maybe_error(depth_limit)?;
         let mut b = [0u8; 4];
         r.read_exact(&mut b)?;
         let i = u32::from_be_bytes(b);
@@ -321,8 +321,8 @@ impl ReadXdr for u32 {
 }
 
 impl WriteXdr for u32 {
-    fn write_xdr(&self, w: &mut impl Write, stack_limit: u32) -> Result<()> {
-        let _ = subtract_stack_limit_maybe_error(stack_limit)?;
+    fn write_xdr(&self, w: &mut impl Write, depth_limit: u32) -> Result<()> {
+        let _ = subtract_depth_limit_maybe_error(depth_limit)?;
         let b: [u8; 4] = self.to_be_bytes();
         w.write_all(&b)?;
         Ok(())
@@ -330,13 +330,13 @@ impl WriteXdr for u32 {
 }
 
 impl<T: ReadXdr> ReadXdr for Option<T> {
-    fn read_xdr(r: &mut impl Read, stack_limit: u32) -> Result<Self> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
-        let i = u32::read_xdr(r, stack_limit)?;
+    fn read_xdr(r: &mut impl Read, depth_limit: u32) -> Result<Self> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
+        let i = u32::read_xdr(r, depth_limit)?;
         match i {
             0 => Ok(None),
             1 => {
-                let t = T::read_xdr(r, stack_limit)?;
+                let t = T::read_xdr(r, depth_limit)?;
                 Ok(Some(t))
             }
             _ => Err(Error::Invalid),
@@ -345,13 +345,13 @@ impl<T: ReadXdr> ReadXdr for Option<T> {
 }
 
 impl<T: WriteXdr> WriteXdr for Option<T> {
-    fn write_xdr(&self, w: &mut impl Write, stack_limit: u32) -> Result<()> {
-        let stack_limit = subtract_stack_limit_maybe_error(stack_limit)?;
+    fn write_xdr(&self, w: &mut impl Write, depth_limit: u32) -> Result<()> {
+        let depth_limit = subtract_depth_limit_maybe_error(depth_limit)?;
         if let Some(t) = self {
-            1u32.write_xdr(w, stack_limit)?;
-            t.write_xdr(w, stack_limit)?;
+            1u32.write_xdr(w, depth_limit)?;
+            t.write_xdr(w, depth_limit)?;
         } else {
-            0u32.write_xdr(w, stack_limit)?;
+            0u32.write_xdr(w, depth_limit)?;
         }
         Ok(())
     }
@@ -363,20 +363,20 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let stack_limit = 5;
+        let depth_limit = 5;
         let a: Option<Option<Option<u32>>> = Some(Some(Some(5)));
         let mut buf = Vec::new();
-        a.write_xdr(&mut buf, stack_limit).unwrap();
+        a.write_xdr(&mut buf, depth_limit).unwrap();
         println!("{:?}", buf)
     }
 
     #[should_panic]
     #[test]
     fn stack_overflow() {
-        let stack_limit = 4;
+        let depth_limit = 4;
         let a: Option<Option<Option<u32>>> = Some(Some(Some(5)));
         let mut buf = Vec::new();
-        a.write_xdr(&mut buf, stack_limit).unwrap();
+        a.write_xdr(&mut buf, depth_limit).unwrap();
         println!("{:?}", buf)
     }
 }
