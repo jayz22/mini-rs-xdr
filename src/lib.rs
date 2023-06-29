@@ -12,13 +12,6 @@ type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     Invalid,
-    Unsupported,
-    LengthExceedsMax,
-    LengthMismatch,
-    NonZeroPadding,
-    Utf8Error(core::str::Utf8Error),
-    #[cfg(feature = "alloc")]
-    InvalidHex,
     Io(io::Error),
     StackOverflow
 }
@@ -26,14 +19,6 @@ pub enum Error {
 impl PartialEq for Error {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Utf8Error(l), Self::Utf8Error(r)) => l == r,
-            // IO errors cannot be compared, but in the absence of any more
-            // meaningful way to compare the errors we compare the kind of error
-            // and ignore the embedded source error or OS error. The main use
-            // case for comparing errors outputted by the XDR library is for
-            // error case testing, and a lack of the ability to compare has a
-            // detrimental affect on failure testing, so this is a tradeoff.
-            #[cfg(feature = "std")]
             (Self::Io(l), Self::Io(r)) => l.kind() == r.kind(),
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
@@ -54,32 +39,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Invalid => write!(f, "xdr value invalid"),
-            Error::Unsupported => write!(f, "xdr value unsupported"),
-            Error::LengthExceedsMax => write!(f, "xdr value max length exceeded"),
-            Error::LengthMismatch => write!(f, "xdr value length does not match"),
-            Error::NonZeroPadding => write!(f, "xdr padding contains non-zero bytes"),
-            Error::Utf8Error(e) => write!(f, "{e}"),
-            #[cfg(feature = "alloc")]
-            Error::InvalidHex => write!(f, "hex invalid"),
             Error::Io(e) => write!(f, "{e}"),
             Error::StackOverflow => write!(f, "stack overflow")
         }
-    }
-}
-
-
-impl From<core::str::Utf8Error> for Error {
-    #[must_use]
-    fn from(e: core::str::Utf8Error) -> Self {
-        Error::Utf8Error(e)
-    }
-}
-
-#[cfg(feature = "alloc")]
-impl From<FromUtf8Error> for Error {
-    #[must_use]
-    fn from(e: FromUtf8Error) -> Self {
-        Error::Utf8Error(e.utf8_error())
     }
 }
 
