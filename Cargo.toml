@@ -1,5 +1,5 @@
 [package]
-name = "mini-xdrgen"
+name = "mini-rs-xdr"
 version = "0.1.0"
 edition = "2021"
 
