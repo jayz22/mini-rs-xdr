@@ -1,4 +1,3 @@
-use core::cell::RefCell;
 use std::{
     error, fmt, io,
     io::{BufRead, BufReader, Cursor, Read, Write},
@@ -100,11 +99,8 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
             Ok([..]) => (),
         };
         // Read the buf into the type.
-        let dg = match DepthGuard::new(&mut self.reader) {
-            Ok(dg) => dg,
-            Err(e) => return Some(Err(e)),
-        };
-        match S::read_xdr(&mut self.reader) {
+        let r = self.reader.with_limited_depth(|dlr| S::read_xdr(dlr));
+        match r {
             Ok(s) => Some(Ok(s)),
             Err(e) => Some(Err(e)),
         }
@@ -112,14 +108,23 @@ impl<R: Read, S: ReadXdr> Iterator for ReadXdrIter<R, S> {
 }
 
 pub trait DepthLimiter {
-    fn enter(&self) -> Result<()>;
-    fn leave(&self);
+    fn enter(&mut self) -> Result<()>;
+    fn leave(&mut self);
+    fn with_limited_depth<T, F>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self) -> Result<T>,
+    {
+        self.enter()?;
+        let res = f(self)?;
+        self.leave();
+        Ok(res)
+    }
 }
 
-struct DepthGuard<'a, D: DepthLimiter>(&'a D);
+struct DepthGuard<'a, D: DepthLimiter>(&'a mut D);
 
 impl<'a, D: DepthLimiter> DepthGuard<'a, D> {
-    fn new(d: &'a D) -> Result<Self> {
+    fn new(d: &'a mut D) -> Result<Self> {
         d.enter()?;
         Ok(Self(d))
     }
@@ -133,31 +138,26 @@ impl<'a, D: DepthLimiter> Drop for DepthGuard<'a, D> {
 
 struct DepthLimitedRead<R: Read> {
     inner: R,
-    depth: RefCell<u32>,
+    depth: u32,
 }
 
 impl<R: Read> DepthLimitedRead<R> {
     fn new(inner: R, depth: u32) -> Self {
-        DepthLimitedRead {
-            inner,
-            depth: RefCell::new(depth),
-        }
+        DepthLimitedRead { inner, depth }
     }
 }
 
 impl<R: Read> DepthLimiter for DepthLimitedRead<R> {
-    fn enter(&self) -> Result<()> {
-        let depth = *self.depth.borrow();
-        if depth == 0 {
+    fn enter(&mut self) -> Result<()> {
+        if self.depth == 0 {
             return Err(Error::StackOverflow);
         }
-        self.depth.replace(depth - 1);
+        self.depth -= 1;
         Ok(())
     }
 
-    fn leave(&self) {
-        let depth = *self.depth.borrow();
-        self.depth.replace(depth.saturating_add(1));
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_add(1);
     }
 }
 
@@ -316,11 +316,11 @@ pub trait WriteXdr {
 
 impl ReadXdr for u32 {
     fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
-        let dg = DepthGuard::new(r)?;
         let mut b = [0u8; 4];
-        r.read_exact(&mut b)?;
-        let i = u32::from_be_bytes(b);
-        Ok(i)
+        r.with_limited_depth(|r| {
+            r.read_exact(&mut b)?;
+            Ok(u32::from_be_bytes(b))
+        })
     }
 }
 
@@ -334,16 +334,17 @@ impl WriteXdr for u32 {
 
 impl<T: ReadXdr> ReadXdr for Option<T> {
     fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
-        let dg = DepthGuard::new(r)?;
-        let i = u32::read_xdr(r)?;
-        match i {
-            0 => Ok(None),
-            1 => {
-                let t = T::read_xdr(r)?;
-                Ok(Some(t))
+        r.with_limited_depth(|r| {
+            let i = u32::read_xdr(r)?;
+            match i {
+                0 => Ok(None),
+                1 => {
+                    let t = T::read_xdr(r)?;
+                    Ok(Some(t))
+                }
+                _ => Err(Error::Invalid),
             }
-            _ => Err(Error::Invalid),
-        }
+        })
     }
 }
 
@@ -369,7 +370,19 @@ mod tests {
         let mut buf = Vec::new();
         a.write_xdr(&mut buf).unwrap();
 
-        let mut dlr = DepthLimitedRead::new(Cursor::new(buf.as_slice()), 1);
+        let mut dlr = DepthLimitedRead::new(Cursor::new(buf.as_slice()), 4);
+        let a_back: Option<Option<Option<u32>>> = ReadXdr::read_xdr(&mut dlr).unwrap();
+        assert_eq!(a, a_back);
+    }
+
+    #[should_panic]
+    #[test]
+    fn stack_overflow() {
+        let a: Option<Option<Option<u32>>> = Some(Some(Some(5)));
+        let mut buf = Vec::new();
+        a.write_xdr(&mut buf).unwrap();
+
+        let mut dlr = DepthLimitedRead::new(Cursor::new(buf.as_slice()), 3);
         let a_back: Option<Option<Option<u32>>> = ReadXdr::read_xdr(&mut dlr).unwrap();
         assert_eq!(a, a_back);
     }
