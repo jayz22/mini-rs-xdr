@@ -1,4 +1,5 @@
 {
     "rust-analyzer.cargo.features": [
-    ]
+    ],
+    "editor.formatOnSave": true
 }
