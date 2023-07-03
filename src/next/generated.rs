@@ -140,7 +140,7 @@ where
     /// Use [`ReadXdr::read_xdr_to_end`] when the intent is for all bytes in the
     /// read implementation to be consumed by the read.
     #[cfg(feature = "std")]
-    fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self>;
+    fn read_xdr<R: Read>(r: &mut DepthLimitedRead<R>) -> Result<Self>;
 
     /// Read the XDR and construct the type, and consider it an error if the
     /// read does not completely consume the read implementation.
@@ -161,7 +161,7 @@ where
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
     #[cfg(feature = "std")]
-    fn read_xdr_to_end<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
+    fn read_xdr_to_end<R: Read>(r: &mut DepthLimitedRead<R>) -> Result<Self> {
         let s = Self::read_xdr(r)?;
         // Check that any further reads, such as this read of one byte, read no
         // data, indicating EOF. If a byte is read the data is invalid.
@@ -187,7 +187,7 @@ where
     /// Use [`ReadXdr::read_xdr_into_to_end`] when the intent is for all bytes
     /// in the read implementation to be consumed by the read.
     #[cfg(feature = "std")]
-    fn read_xdr_into<DLR: DepthLimiter + Read>(&mut self, r: &mut DLR) -> Result<()> {
+    fn read_xdr_into<R: Read>(&mut self, r: &mut DepthLimitedRead<R>) -> Result<()> {
         *self = Self::read_xdr(r)?;
         Ok(())
     }
@@ -211,7 +211,7 @@ where
     /// All implementations should continue if the read implementation returns
     /// [`ErrorKind::Interrupted`](std::io::ErrorKind::Interrupted).
     #[cfg(feature = "std")]
-    fn read_xdr_into_to_end<DLR: DepthLimiter + Read>(&mut self, r: &mut DLR) -> Result<()> {
+    fn read_xdr_into_to_end<R: Read>(&mut self, r: &mut DepthLimitedRead<R>) -> Result<()> {
         Self::read_xdr_into(self, r)?;
         // Check that any further reads, such as this read of one byte, read no
         // data, indicating EOF. If a byte is read the data is invalid.
@@ -259,7 +259,7 @@ where
 
 pub trait WriteXdr {
     #[cfg(feature = "std")]
-    fn write_xdr<DLW: DepthLimiter + Write>(&self, w: &mut DLW) -> Result<()>;
+    fn write_xdr<W: Write>(&self, w: &mut DepthLimitedWrite<W>) -> Result<()>;
 
     #[cfg(feature = "std")]
     fn to_xdr(&self, depth_limit: u32) -> Result<Vec<u8>> {
@@ -272,7 +272,7 @@ pub trait WriteXdr {
 
 impl ReadXdr for u32 {
     #[cfg(feature = "std")]
-    fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
+    fn read_xdr<R: Read>(r: &mut DepthLimitedRead<R>) -> Result<Self> {
         let mut b = [0u8; 4];
         r.with_limited_depth(|r| {
             r.read_exact(&mut b)?;
@@ -283,7 +283,7 @@ impl ReadXdr for u32 {
 
 impl WriteXdr for u32 {
     #[cfg(feature = "std")]
-    fn write_xdr<DLW: DepthLimiter + Write>(&self, w: &mut DLW) -> Result<()> {
+    fn write_xdr<W: Write>(&self, w: &mut DepthLimitedWrite<W>) -> Result<()> {
         let b: [u8; 4] = self.to_be_bytes();
         w.with_limited_depth(|w| Ok(w.write_all(&b)?))
     }
@@ -291,7 +291,7 @@ impl WriteXdr for u32 {
 
 impl<T: ReadXdr> ReadXdr for Option<T> {
     #[cfg(feature = "std")]
-    fn read_xdr<DLR: DepthLimiter + Read>(r: &mut DLR) -> Result<Self> {
+    fn read_xdr<R: Read>(r: &mut DepthLimitedRead<R>) -> Result<Self> {
         r.with_limited_depth(|r| {
             let i = u32::read_xdr(r)?;
             match i {
@@ -308,7 +308,7 @@ impl<T: ReadXdr> ReadXdr for Option<T> {
 
 impl<T: WriteXdr> WriteXdr for Option<T> {
     #[cfg(feature = "std")]
-    fn write_xdr<DLW: DepthLimiter + Write>(&self, w: &mut DLW) -> Result<()> {
+    fn write_xdr<W: Write>(&self, w: &mut DepthLimitedWrite<W>) -> Result<()> {
         w.with_limited_depth(|w| {
             Ok(if let Some(t) = self {
                 1u32.write_xdr(w)?;
