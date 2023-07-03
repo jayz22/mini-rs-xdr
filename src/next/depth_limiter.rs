@@ -1,10 +1,12 @@
 use super::Error;
 #[cfg(feature = "std")]
+use core::cell::RefCell;
+#[cfg(feature = "std")]
 use std::io::{Read, Write};
 
 pub trait DepthLimiter {
-    fn enter(&mut self) -> Result<(), Error>;
-    fn leave(&mut self);
+    fn enter(&self) -> Result<(), Error>;
+    fn leave(&self);
     fn with_limited_depth<T, F>(&mut self, f: F) -> Result<T, Error>
     where
         F: FnOnce(&mut Self) -> Result<T, Error>,
@@ -16,11 +18,11 @@ pub trait DepthLimiter {
     }
 }
 
-pub struct DepthGuard<'a, D: DepthLimiter>(&'a mut D);
+pub struct DepthGuard<'a, D: DepthLimiter>(&'a D);
 
 impl<'a, D: DepthLimiter> DepthGuard<'a, D> {
     #[allow(unused)]
-    pub fn new(d: &'a mut D) -> Result<Self, Error> {
+    pub fn new(d: &'a D) -> Result<Self, Error> {
         d.enter()?;
         Ok(Self(d))
     }
@@ -35,28 +37,33 @@ impl<'a, D: DepthLimiter> Drop for DepthGuard<'a, D> {
 #[cfg(feature = "std")]
 pub(crate) struct DepthLimitedRead<R: Read> {
     pub(crate) inner: R,
-    depth: u32,
+    depth: RefCell<u32>,
 }
 
 #[cfg(feature = "std")]
 impl<R: Read> DepthLimitedRead<R> {
     pub(crate) fn new(inner: R, depth: u32) -> Self {
-        DepthLimitedRead { inner, depth }
+        DepthLimitedRead {
+            inner,
+            depth: RefCell::new(depth),
+        }
     }
 }
 
 #[cfg(feature = "std")]
 impl<R: Read> DepthLimiter for DepthLimitedRead<R> {
-    fn enter(&mut self) -> Result<(), Error> {
-        if self.depth == 0 {
+    fn enter(&self) -> Result<(), Error> {
+        let depth = *self.depth.borrow();
+        if depth == 0 {
             return Err(Error::StackOverflow);
         }
-        self.depth -= 1;
+        self.depth.replace(depth - 1);
         Ok(())
     }
 
-    fn leave(&mut self) {
-        self.depth = self.depth.saturating_add(1);
+    fn leave(&self) {
+        let depth = *self.depth.borrow();
+        self.depth.replace(depth.saturating_add(1));
     }
 }
 
@@ -70,28 +77,33 @@ impl<R: Read> Read for DepthLimitedRead<R> {
 #[cfg(feature = "std")]
 pub(crate) struct DepthLimitedWrite<W: Write> {
     pub(crate) inner: W,
-    depth: u32,
+    depth: RefCell<u32>,
 }
 
 #[cfg(feature = "std")]
 impl<W: Write> DepthLimitedWrite<W> {
     pub(crate) fn new(inner: W, depth: u32) -> Self {
-        DepthLimitedWrite { inner, depth }
+        DepthLimitedWrite {
+            inner,
+            depth: RefCell::new(depth),
+        }
     }
 }
 
 #[cfg(feature = "std")]
 impl<W: Write> DepthLimiter for DepthLimitedWrite<W> {
-    fn enter(&mut self) -> Result<(), Error> {
-        if self.depth == 0 {
+    fn enter(&self) -> Result<(), Error> {
+        let depth = *self.depth.borrow();
+        if depth == 0 {
             return Err(Error::StackOverflow);
         }
-        self.depth -= 1;
+        self.depth.replace(depth - 1);
         Ok(())
     }
 
-    fn leave(&mut self) {
-        self.depth = self.depth.saturating_add(1);
+    fn leave(&self) {
+        let depth = *self.depth.borrow();
+        self.depth.replace(depth.saturating_add(1));
     }
 }
 
