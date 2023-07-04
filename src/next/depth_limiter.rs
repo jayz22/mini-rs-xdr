@@ -4,15 +4,15 @@ use core::cell::RefCell;
 use std::io::{Read, Write};
 
 pub trait DepthLimiter {
-    type Error;
+    type DepthError;
 
-    fn enter(&self) -> Result<(), Self::Error>;
+    fn enter(&self) -> Result<(), Self::DepthError>;
 
     fn leave(&self);
 
-    fn with_limited_depth<T, F>(&mut self, f: F) -> Result<T, Self::Error>
+    fn with_limited_depth<T, F>(&mut self, f: F) -> Result<T, Self::DepthError>
     where
-        F: FnOnce(&mut Self) -> Result<T, Self::Error>,
+        F: FnOnce(&mut Self) -> Result<T, Self::DepthError>,
     {
         self.enter()?;
         let res = f(self)?;
@@ -25,7 +25,7 @@ pub struct DepthGuard<'a, D: DepthLimiter>(&'a D);
 
 impl<'a, D: DepthLimiter> DepthGuard<'a, D> {
     #[allow(unused)]
-    pub fn new(d: &'a D) -> Result<Self, D::Error> {
+    pub fn new(d: &'a D) -> Result<Self, D::DepthError> {
         d.enter()?;
         Ok(Self(d))
     }
@@ -55,12 +55,12 @@ impl<R: Read> DepthLimitedRead<R> {
 
 #[cfg(feature = "std")]
 impl<R: Read> DepthLimiter for DepthLimitedRead<R> {
-    type Error = super::Error;
+    type DepthError = super::Error;
 
-    fn enter(&self) -> Result<(), Self::Error> {
+    fn enter(&self) -> Result<(), super::Error> {
         let depth = *self.depth.borrow();
         if depth == 0 {
-            return Err(Self::Error::StackOverflow);
+            return Err(super::Error::StackOverflow);
         }
         self.depth.replace(depth - 1);
         Ok(())
@@ -97,12 +97,12 @@ impl<W: Write> DepthLimitedWrite<W> {
 
 #[cfg(feature = "std")]
 impl<W: Write> DepthLimiter for DepthLimitedWrite<W> {
-    type Error = super::Error;
+    type DepthError = super::Error;
 
-    fn enter(&self) -> Result<(), Self::Error> {
+    fn enter(&self) -> Result<(), super::Error> {
         let depth = *self.depth.borrow();
         if depth == 0 {
-            return Err(Self::Error::StackOverflow);
+            return Err(super::Error::StackOverflow);
         }
         self.depth.replace(depth - 1);
         Ok(())
